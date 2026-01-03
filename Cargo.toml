@@ -1,0 +1,15 @@
+[package]
+name = "vol_path"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "vol_path"
+path = "src/bin.rs"
+
+[lib]
+name = "vol_path"
+path = "src/lib.rs"
+
+[dependencies]
+clippy = "0.0.302"

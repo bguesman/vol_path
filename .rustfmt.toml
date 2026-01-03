@@ -1,0 +1,6 @@
+# Because 4 space indentation is insane
+tab_spaces=2
+# For putting 2 blank lines between top level items
+blank_lines_upper_bound=2
+# Req for blank_lines_upper_bound
+unstable_features=true
