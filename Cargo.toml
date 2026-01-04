@@ -14,3 +14,4 @@ path = "src/lib.rs"
 [dependencies]
 clippy = "0.0.302"
 glam = "0.30.9"
+image = "0.25.9"
