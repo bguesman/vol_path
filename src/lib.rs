@@ -1,14 +1,539 @@
-pub fn add(left: u64, right: u64) -> u64 {
-  left + right
+use glam::{Vec2, Vec3A};
+use image::{Rgb, RgbImage};
+use indicatif::ProgressIterator;
+use intervals::Closed;
+
+
+// Few aliases to distinguish colors from R^3 points
+type Color = Vec3A;
+#[allow(unused)]
+type Point3 = Vec3A;
+type World = Vec<Box<dyn Hittable>>;
+
+
+fn random_vec3_in_range(min: f32, max: f32) -> Vec3A {
+  Vec3A::new(
+    rand::random_range(min..max),
+    rand::random_range(min..max),
+    rand::random_range(min..max),
+  )
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
 
-  #[test]
-  fn it_works() {
-    let result = add(2, 2);
-    assert_eq!(result, 4);
+#[allow(unused)]
+fn random_vec3() -> Vec3A {
+  random_vec3_in_range(0.0, 1.0)
+}
+
+
+fn random_unit_vector() -> Vec3A {
+  let mut p = random_vec3_in_range(-1.0, 1.0);
+  while p.length_squared() > 1.0 || p.length_squared() < 1e-160 {
+    p = random_vec3_in_range(-1.0, 1.0);
+  }
+  p.normalize()
+}
+
+
+fn random_in_unit_disk() -> Vec3A {
+  let mut p = random_vec3_in_range(-1.0, 1.0);
+  p.z = 0.0;
+  while p.length_squared() >= 1.0 {
+    p = random_vec3_in_range(-1.0, 1.0);
+    p.z = 0.0;
+  }
+  p
+}
+
+
+fn linear_to_gamma(linear_component: f32) -> f32 {
+  if linear_component > 0.0 {
+    f32::sqrt(linear_component)
+  } else {
+    0.0
   }
 }
+
+
+#[allow(unused)]
+fn random_on_hemisphere(normal: Vec3A) -> Vec3A {
+  let on_unit_sphere = random_unit_vector();
+  if Vec3A::dot(on_unit_sphere, normal) > 0.0 {
+    on_unit_sphere
+  } else {
+    -on_unit_sphere
+  }
+}
+
+
+struct Ray {
+  origin: Point3,
+  direction: Vec3A,
+}
+
+
+impl Ray {
+  fn new(origin: Point3, direction: Vec3A) -> Ray {
+    Ray { origin, direction }
+  }
+
+  fn at(&self, index: f32) -> Point3 {
+    self.origin + self.direction * index
+  }
+}
+
+
+#[allow(unused)]
+struct Hit<'a> {
+  pub p: Point3,
+  pub normal: Vec3A,
+  pub material: &'a dyn Material,
+  pub t: f32,
+  pub front_face: bool,
+}
+
+
+impl<'a> Hit<'a> {
+  fn new(p: Point3, normal: Vec3A, t: f32, r: &Ray, material: &'a dyn Material) -> Self {
+    let front_face = Vec3A::dot(r.direction, normal) < 0.0;
+    let normal = if front_face { normal } else { -normal };
+    Hit {
+      p,
+      normal,
+      material,
+      t,
+      front_face,
+    }
+  }
+}
+
+
+trait Hittable {
+  fn hit<'a>(&'a self, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>>;
+}
+
+
+struct Sphere {
+  center: Point3,
+  radius: f32,
+  material: Box<dyn Material>,
+}
+
+
+impl Sphere {
+  fn new(center: Point3, radius: f32, material: Box<dyn Material>) -> Self {
+    Sphere {
+      center,
+      radius,
+      material,
+    }
+  }
+}
+
+
+impl Hittable for Sphere {
+  fn hit<'a>(&'a self, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>> {
+    let origin = self.center - r.origin;
+    let a = r.direction.length_squared();
+    let h = Vec3A::dot(r.direction, origin);
+    let c = origin.length_squared() - self.radius * self.radius;
+    let discriminant = h * h - a * c;
+    if discriminant < 0.0 {
+      return None;
+    }
+
+    let sqrt_disc = f32::sqrt(discriminant);
+
+    let mut t = (h - sqrt_disc) / a;
+    if !ray_t.contains(t) {
+      t = (h + sqrt_disc) / a;
+      if !ray_t.contains(t) {
+        return None;
+      }
+    }
+
+    let p = r.at(t);
+    let normal = (p - self.center) / self.radius;
+    Some(Hit::new(p, normal, t, r, self.material.as_ref()))
+  }
+}
+
+
+#[allow(unused)]
+struct ScatterResult<'a> {
+  hit: &'a Hit<'a>,
+  attenuation: Color,
+  scatter_direction: Ray,
+}
+
+
+trait Material {
+  fn scatter<'a>(&self, _: &Ray, _: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    None
+  }
+}
+
+
+struct LambertianMaterial {
+  albedo: Color,
+}
+
+
+impl Material for LambertianMaterial {
+  fn scatter<'a>(&self, _: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let mut scatter_direction = hit.normal + random_unit_vector();
+
+    // Catch degenerate scatter direction
+    if Vec3A::abs(scatter_direction).min_element() < 1e-8 {
+      scatter_direction = hit.normal;
+    }
+
+    Some(ScatterResult {
+      hit,
+      attenuation: self.albedo,
+      scatter_direction: Ray::new(hit.p, scatter_direction),
+    })
+  }
+}
+
+
+struct MetalMaterial {
+  albedo: Color,
+  roughness: f32,
+}
+
+
+impl Material for MetalMaterial {
+  fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let reflected = Vec3A::reflect(r.direction, hit.normal);
+    let reflected = reflected.normalize() + self.roughness * random_unit_vector();
+    let scatter_direction = Ray::new(hit.p, reflected);
+    if Vec3A::dot(scatter_direction.direction, hit.normal) > 0.0 {
+      Some(ScatterResult {
+        hit,
+        attenuation: self.albedo,
+        scatter_direction,
+      })
+    } else {
+      None
+    }
+  }
+}
+
+
+struct DielectricMaterial {
+  ior: f32,
+}
+
+
+impl DielectricMaterial {
+  fn reflectance(cos_theta: f32, ior: f32) -> f32 {
+    let r0 = (1.0 - ior) / (1.0 + ior);
+    let r0 = r0 * r0;
+    r0 + (1.0 - r0) * f32::powf(1.0 - cos_theta, 5.0)
+  }
+}
+
+
+impl Material for DielectricMaterial {
+  fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let attenuation = Color::new(1.0, 1.0, 1.0);
+    let ri = if hit.front_face {
+      1.0 / self.ior
+    } else {
+      self.ior
+    };
+
+    let unit_dir = r.direction.normalize();
+    let cos_theta = f32::min(Vec3A::dot(-unit_dir, hit.normal), 1.0);
+    let sin_theta = f32::sqrt(1.0 - cos_theta * cos_theta);
+
+    let cannot_refract = ri * sin_theta > 1.0;
+    let direction =
+      if cannot_refract || DielectricMaterial::reflectance(cos_theta, ri) > rand::random() {
+        unit_dir.reflect(hit.normal)
+      } else {
+        unit_dir.refract(hit.normal, ri)
+      };
+
+    Some(ScatterResult {
+      hit,
+      attenuation,
+      scatter_direction: Ray::new(hit.p, direction),
+    })
+  }
+}
+
+
+#[allow(unused)]
+struct Camera {
+  pub aspect_ratio: f32,
+  pub image_width: u32,
+  pub samples_per_pixel: u32,
+  pub max_depth: u32,
+  pub vfov: f32,
+  pub look_from: Point3,
+  pub look_at: Point3,
+  pub v_up: Vec3A,
+  pub defocus_angle: f32,
+  pub focus_dist: f32,
+  image_height: u32,
+  center: Point3,
+  pixel00_loc: Point3,
+  pixel_delta_u: Vec3A,
+  pixel_delta_v: Vec3A,
+  // Camera basis vectors
+  u: Vec3A,
+  v: Vec3A,
+  w: Vec3A,
+  defocus_disk_u: Vec3A,
+  defocus_disk_v: Vec3A,
+}
+
+
+impl Camera {
+  #[allow(clippy::too_many_arguments)]
+  fn new(
+    aspect_ratio: f32,
+    image_width: u32,
+    samples_per_pixel: u32,
+    max_depth: u32,
+    vfov: f32,
+    look_from: Point3,
+    look_at: Point3,
+    v_up: Vec3A,
+    defocus_angle: f32,
+    focus_dist: f32,
+  ) -> Self {
+    let image_height = (image_width as f32 / aspect_ratio) as u32;
+
+    let center = look_from;
+
+    // Viewport dimensions
+    let theta = f32::to_radians(vfov);
+    let h = f32::tan(theta / 2.0);
+    let viewport_height = 2.0 * h * focus_dist;
+    let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
+
+    // Camera basis frame
+    let w = (look_from - look_at).normalize();
+    let u = v_up.cross(w).normalize();
+    let v = w.cross(u);
+
+    // Pixel mapping
+    let viewport_u = viewport_width * u;
+    let viewport_v = viewport_height * -v;
+    let pixel_delta_u = viewport_u / image_width as f32;
+    let pixel_delta_v = viewport_v / image_height as f32;
+    let viewport_upper_left = center - (focus_dist * w) - (viewport_u / 2.0) - (viewport_v / 2.0);
+    let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+    let defocus_radius = focus_dist * f32::tan(f32::to_radians(defocus_angle / 2.0));
+    let defocus_disk_u = u * defocus_radius;
+    let defocus_disk_v = v * defocus_radius;
+
+    Camera {
+      aspect_ratio,
+      image_width,
+      samples_per_pixel,
+      max_depth,
+      vfov,
+      defocus_angle,
+      focus_dist,
+      look_from,
+      look_at,
+      v_up,
+      image_height,
+      center,
+      pixel00_loc,
+      pixel_delta_u,
+      pixel_delta_v,
+      u,
+      v,
+      w,
+      defocus_disk_u,
+      defocus_disk_v,
+    }
+  }
+
+
+  fn ray_color(&self, r: &Ray, depth: u32, world: &World) -> Color {
+    if depth == 0 {
+      return Color::new(0.0, 0.0, 0.0);
+    }
+
+    let hit = closest_hit(world, r, &Closed::closed_unchecked(0.001, f32::MAX));
+    match hit {
+      Some(hit) => {
+        let scatter_result = hit.material.scatter(r, &hit);
+        match scatter_result {
+          Some(scatter_result) => {
+            scatter_result.attenuation
+              * self.ray_color(&scatter_result.scatter_direction, depth - 1, world)
+          }
+          None => Color::new(0.0, 0.0, 0.0),
+        }
+      }
+      None => {
+        // Sky
+        let unit_direction = r.direction.normalize();
+        let a = 0.5 * (unit_direction.y + 1.0);
+        Color::lerp(Color::new(1.0, 1.0, 1.0), Color::new(0.5, 0.7, 1.0), a)
+      }
+    }
+  }
+
+
+  fn render(&self, world: &World, out_path: &str) {
+    let mut image = RgbImage::new(self.image_width, self.image_height);
+
+    for r in (0..image.height()).progress() {
+      for c in 0..image.width() {
+        let mut pixel_color = Color::new(0.0, 0.0, 0.0);
+        for _ in 0..self.samples_per_pixel {
+          let ray = self.get_ray(r, c);
+          pixel_color += self.ray_color(&ray, self.max_depth, world);
+        }
+        pixel_color /= self.samples_per_pixel as f32;
+        write_color(&pixel_color, &mut image, r, c);
+      }
+    }
+
+    image.save(out_path).expect("Failed to save image");
+  }
+
+
+  fn get_ray(&self, r: u32, c: u32) -> Ray {
+    let offset = -0.5 + 0.5 * Vec2::new(rand::random(), rand::random());
+    let pixel_sample = self.pixel00_loc
+      + ((c as f32 + offset.x) * self.pixel_delta_u)
+      + ((r as f32 + offset.y) * self.pixel_delta_v);
+    let ray_origin = if self.defocus_angle <= 0.0 {
+      self.center
+    } else {
+      self.defocus_disk_sample()
+    };
+    let ray_direction = pixel_sample - ray_origin;
+    Ray::new(ray_origin, ray_direction)
+  }
+
+
+  fn defocus_disk_sample(&self) -> Point3 {
+    let p = random_in_unit_disk();
+    self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v)
+  }
+}
+
+
+fn closest_hit<'a>(world: &'a World, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>> {
+  let mut closest_hit: Option<Hit> = None;
+
+  for object in world {
+    let closest_t = closest_hit.as_ref().map_or(ray_t.right.0, |h| h.t);
+    let hit = object.hit(r, &Closed::closed_unchecked(ray_t.left.0, closest_t));
+    if hit.is_some() {
+      closest_hit = hit;
+    }
+  }
+
+  closest_hit
+}
+
+
+fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
+  image.put_pixel(
+    c,
+    r,
+    Rgb([
+      (linear_to_gamma(color.x) * 255.999) as u8,
+      (linear_to_gamma(color.y) * 255.999) as u8,
+      (linear_to_gamma(color.z) * 255.999) as u8,
+    ]),
+  );
+}
+
+
+pub fn render(out_path: &str) {
+  let mut world: World = vec![];
+
+  let mat_ground = LambertianMaterial {
+    albedo: Color::new(0.5, 0.5, 0.5),
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(0.0, -1000.0, 0.0),
+    1000.0,
+    Box::new(mat_ground),
+  )));
+
+  for a in -11..11 {
+    for b in -11..11 {
+      let material_choice: f32 = rand::random();
+      let center: Point3 = Point3::new(
+        a as f32 + 0.9 * rand::random::<f32>(),
+        0.2,
+        b as f32 + 0.9 * rand::random::<f32>(),
+      );
+
+      if (center - Point3::new(4.0, 0.2, 0.0)).length() > 0.9 {
+        let material: Box<dyn Material> = if material_choice < 0.8 {
+          let albedo = random_vec3() * random_vec3();
+          Box::new(LambertianMaterial { albedo })
+        } else if material_choice < 0.95 {
+          let albedo = random_vec3_in_range(0.5, 1.0);
+          let roughness = rand::random_range(0.0..0.5);
+          Box::new(MetalMaterial { albedo, roughness })
+        } else {
+          Box::new(DielectricMaterial { ior: 1.5 })
+        };
+
+        world.push(Box::new(Sphere::new(center, 0.2, material)));
+      }
+    }
+  }
+
+  let mat_1 = DielectricMaterial { ior: 1.5 };
+  world.push(Box::new(Sphere::new(
+    Point3::new(0.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_1),
+  )));
+
+
+  let mat_2 = LambertianMaterial {
+    albedo: Color::new(0.4, 0.2, 0.1),
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(-4.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_2),
+  )));
+
+  let mat_3 = MetalMaterial {
+    albedo: Color::new(0.7, 0.6, 0.5),
+    roughness: 0.0,
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(4.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_3),
+  )));
+
+  let camera = Camera::new(
+    /*aspect_ratio=*/ 16.0 / 9.0,
+    /*image_width=*/ 400,
+    /*samples_per_pixel=*/ 100,
+    /*max_ray_depth=*/ 10,
+    /*v_fov=*/ 20.0,
+    /*look_from=*/ Point3::new(13.0, 2.0, 3.0),
+    /*look_at=*/ Point3::new(0.0, 0.0, -1.0),
+    /*v_up=*/ Vec3A::new(0.0, 1.0, 0.0),
+    /*defocus_angle=*/ 0.6,
+    /*focus_dist=*/ 10.0,
+  );
+
+  camera.render(&world, out_path);
+}
+
+
+#[cfg(test)]
+mod tests {}
