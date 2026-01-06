@@ -35,6 +35,15 @@ fn random_unit_vector() -> Vec3A {
 }
 
 
+fn linear_to_gamma(linear_component: f32) -> f32 {
+  if linear_component > 0.0 {
+    f32::sqrt(linear_component)
+  } else {
+    0.0
+  }
+}
+
+
 fn random_on_hemisphere(normal: Vec3A) -> Vec3A {
   let on_unit_sphere = random_unit_vector();
   if Vec3A::dot(on_unit_sphere, normal) > 0.0 {
@@ -256,14 +265,13 @@ fn closest_hit(world: &World, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
 
 
 fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
-  let remapped_u8 = color * 255.999;
   image.put_pixel(
     c,
     r,
     Rgb([
-      remapped_u8.x as u8,
-      remapped_u8.y as u8,
-      remapped_u8.z as u8,
+      (linear_to_gamma(color.x) * 255.999) as u8,
+      (linear_to_gamma(color.y) * 255.999) as u8,
+      (linear_to_gamma(color.z) * 255.999) as u8,
     ]),
   );
 }
