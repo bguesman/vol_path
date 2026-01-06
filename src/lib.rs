@@ -1,6 +1,7 @@
 use glam::Vec3A;
 use image::{Rgb, RgbImage};
 use indicatif::ProgressIterator;
+use intervals::Closed;
 
 
 // Few aliases to distinguish colors from R^3 points
@@ -58,7 +59,7 @@ enum HitResult {
 
 
 trait Hittable {
-  fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> HitResult;
+  fn hit(&self, r: &Ray, ray_t: &Closed<f32>) -> HitResult;
 }
 
 
@@ -76,7 +77,7 @@ impl Sphere {
 
 
 impl Hittable for Sphere {
-  fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> HitResult {
+  fn hit(&self, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
     let origin = self.center - r.origin;
     let a = r.direction.length_squared();
     let h = Vec3A::dot(r.direction, origin);
@@ -89,9 +90,9 @@ impl Hittable for Sphere {
     let sqrt_disc = f32::sqrt(discriminant);
 
     let mut t = (h - sqrt_disc) / a;
-    if t <= tmin || tmax <= t {
+    if !ray_t.contains(t) {
       t = (h + sqrt_disc) / a;
-      if t <= tmin || tmax <= t {
+      if !ray_t.contains(t) {
         return HitResult::Miss;
       }
     }
@@ -103,11 +104,11 @@ impl Hittable for Sphere {
 }
 
 
-fn closest_hit(world: &World, r: &Ray, tmin: f32, tmax: f32) -> HitResult {
+fn closest_hit(world: &World, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
   let mut closest_hit = HitResult::Miss;
-  let mut closest_t = tmax;
+  let mut closest_t = ray_t.right.0;
   for object in world {
-    let hit = object.hit(r, tmin, closest_t);
+    let hit = object.hit(r, &Closed::closed_unchecked(ray_t.left.0, closest_t));
     match hit {
       HitResult::Hit(data) => {
         closest_t = data.t;
@@ -122,7 +123,7 @@ fn closest_hit(world: &World, r: &Ray, tmin: f32, tmax: f32) -> HitResult {
 
 
 fn ray_color(r: &Ray, world: &World) -> Color {
-  let hit = closest_hit(world, r, 0.0, f32::MAX);
+  let hit = closest_hit(world, r, &Closed::closed_unchecked(0.0, f32::MAX));
   match hit {
     HitResult::Hit(data) => 0.5 * (data.normal + 1.0),
     HitResult::Miss => {
