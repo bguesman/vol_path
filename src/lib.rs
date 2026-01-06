@@ -44,6 +44,7 @@ fn linear_to_gamma(linear_component: f32) -> f32 {
 }
 
 
+#[allow(unused)]
 fn random_on_hemisphere(normal: Vec3A) -> Vec3A {
   let on_unit_sphere = random_unit_vector();
   if Vec3A::dot(on_unit_sphere, normal) > 0.0 {
@@ -71,23 +72,24 @@ impl Ray {
 }
 
 
-#[derive(Debug, Copy, Clone)]
 #[allow(unused)]
-struct HitData {
+struct Hit<'a> {
   pub p: Point3,
   pub normal: Vec3A,
+  pub material: &'a dyn Material,
   pub t: f32,
   pub front_face: bool,
 }
 
 
-impl HitData {
-  fn new(p: Point3, normal: Vec3A, t: f32, r: &Ray) -> Self {
+impl<'a> Hit<'a> {
+  fn new(p: Point3, normal: Vec3A, t: f32, r: &Ray, material: &'a dyn Material) -> Self {
     let front_face = Vec3A::dot(r.direction, normal) < 0.0;
     let normal = if front_face { normal } else { -normal };
-    HitData {
+    Hit {
       p,
       normal,
+      material,
       t,
       front_face,
     }
@@ -95,39 +97,38 @@ impl HitData {
 }
 
 
-enum HitResult {
-  Miss,
-  Hit(HitData),
-}
-
-
 trait Hittable {
-  fn hit(&self, r: &Ray, ray_t: &Closed<f32>) -> HitResult;
+  fn hit<'a>(&'a self, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>>;
 }
 
 
 struct Sphere {
   center: Point3,
   radius: f32,
+  material: Box<dyn Material>,
 }
 
 
 impl Sphere {
-  fn new(center: Point3, radius: f32) -> Self {
-    Sphere { center, radius }
+  fn new(center: Point3, radius: f32, material: Box<dyn Material>) -> Self {
+    Sphere {
+      center,
+      radius,
+      material,
+    }
   }
 }
 
 
 impl Hittable for Sphere {
-  fn hit(&self, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
+  fn hit<'a>(&'a self, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>> {
     let origin = self.center - r.origin;
     let a = r.direction.length_squared();
     let h = Vec3A::dot(r.direction, origin);
     let c = origin.length_squared() - self.radius * self.radius;
     let discriminant = h * h - a * c;
     if discriminant < 0.0 {
-      return HitResult::Miss;
+      return None;
     }
 
     let sqrt_disc = f32::sqrt(discriminant);
@@ -136,13 +137,68 @@ impl Hittable for Sphere {
     if !ray_t.contains(t) {
       t = (h + sqrt_disc) / a;
       if !ray_t.contains(t) {
-        return HitResult::Miss;
+        return None;
       }
     }
 
     let p = r.at(t);
     let normal = (p - self.center) / self.radius;
-    HitResult::Hit(HitData::new(p, normal, t, r))
+    Some(Hit::new(p, normal, t, r, self.material.as_ref()))
+  }
+}
+
+
+#[allow(unused)]
+struct ScatterResult<'a> {
+  hit: &'a Hit<'a>,
+  attenuation: Color,
+  scatter_direction: Ray,
+}
+
+
+trait Material {
+  fn scatter<'a>(&self, _: &Ray, _: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    None
+  }
+}
+
+
+struct LambertianMaterial {
+  albedo: Color,
+}
+
+
+impl Material for LambertianMaterial {
+  fn scatter<'a>(&self, _: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let mut scatter_direction = hit.normal + random_unit_vector();
+
+    // Catch degenerate scatter direction
+    if Vec3A::abs(scatter_direction).min_element() < 1e-8 {
+      scatter_direction = hit.normal;
+    }
+
+    Some(ScatterResult {
+      hit,
+      attenuation: self.albedo,
+      scatter_direction: Ray::new(hit.p, scatter_direction),
+    })
+  }
+}
+
+
+struct MetalMaterial {
+  albedo: Color,
+}
+
+
+impl Material for MetalMaterial {
+  fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let reflected = Vec3A::reflect(r.direction, hit.normal);
+    Some(ScatterResult {
+      hit,
+      attenuation: self.albedo,
+      scatter_direction: Ray::new(hit.p, reflected),
+    })
   }
 }
 
@@ -202,11 +258,17 @@ impl Camera {
 
     let hit = closest_hit(world, r, &Closed::closed_unchecked(0.001, f32::MAX));
     match hit {
-      HitResult::Hit(data) => {
-        let direction = random_on_hemisphere(data.normal);
-        self.ray_color(&Ray::new(data.p, direction), depth - 1, world) * 0.5
+      Some(hit) => {
+        let scatter_result = hit.material.scatter(r, &hit);
+        match scatter_result {
+          Some(scatter_result) => {
+            scatter_result.attenuation
+              * self.ray_color(&scatter_result.scatter_direction, depth - 1, world)
+          }
+          None => Color::new(0.0, 0.0, 0.0),
+        }
       }
-      HitResult::Miss => {
+      None => {
         // Sky
         let unit_direction = r.direction.normalize();
         let a = 0.5 * (unit_direction.y + 1.0);
@@ -246,18 +308,15 @@ impl Camera {
 }
 
 
-fn closest_hit(world: &World, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
-  let mut closest_hit = HitResult::Miss;
-  let mut closest_t = ray_t.right.0;
+fn closest_hit<'a>(world: &'a World, r: &Ray, ray_t: &Closed<f32>) -> Option<Hit<'a>> {
+  let mut closest_hit: Option<Hit> = None;
+
   for object in world {
+    let closest_t = closest_hit.as_ref().map_or(ray_t.right.0, |h| h.t);
     let hit = object.hit(r, &Closed::closed_unchecked(ray_t.left.0, closest_t));
-    match hit {
-      HitResult::Hit(data) => {
-        closest_t = data.t;
-        closest_hit = hit;
-      }
-      HitResult::Miss => (),
-    };
+    if hit.is_some() {
+      closest_hit = hit;
+    }
   }
 
   closest_hit
@@ -278,12 +337,43 @@ fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
 
 
 pub fn render(out_path: &str) {
+  let mat_ground = LambertianMaterial {
+    albedo: Color::new(0.8, 0.8, 0.0),
+  };
+  let mat_center = LambertianMaterial {
+    albedo: Color::new(0.1, 0.2, 0.5),
+  };
+  let mat_left = MetalMaterial {
+    albedo: Color::new(0.8, 0.8, 0.8),
+  };
+  let mat_right = MetalMaterial {
+    albedo: Color::new(0.8, 0.6, 0.2),
+  };
+
   let world: World = vec![
-    Box::new(Sphere::new(Point3::new(0.0, 0.0, -1.0), 0.5)),
-    Box::new(Sphere::new(Point3::new(0.0, -100.5, -1.0), 100.0)),
+    Box::new(Sphere::new(
+      Point3::new(0.0, 0.0, -1.2),
+      0.5,
+      Box::new(mat_center),
+    )),
+    Box::new(Sphere::new(
+      Point3::new(0.0, -100.5, -1.0),
+      100.0,
+      Box::new(mat_ground),
+    )),
+    Box::new(Sphere::new(
+      Point3::new(-1.0, -0.0, -1.0),
+      0.5,
+      Box::new(mat_left),
+    )),
+    Box::new(Sphere::new(
+      Point3::new(1.0, -0.0, -1.0),
+      0.5,
+      Box::new(mat_right),
+    )),
   ];
 
-  let camera = Camera::new(16.0 / 9.0, 400, 64, 10);
+  let camera = Camera::new(16.0 / 9.0, 400, 16, 10);
 
   camera.render(&world, out_path);
 }
