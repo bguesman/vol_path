@@ -1,8 +1,19 @@
-use glam::Vec3A;
+use clap::Parser;
+use vol_path::render;
+
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+  /// Name of the person to greet
+  #[arg(short, long)]
+  out_path: String,
+}
+
 
 fn main() {
-  println!(
-    "vol path {}",
-    Vec3A::new(1.0, 2.0, 3.0) + Vec3A::new(1.0, 2.0, 3.0)
-  );
+  let args = Args::parse();
+  println!("Rendering image, saving to {}...", args.out_path);
+
+  render(&args.out_path);
 }
