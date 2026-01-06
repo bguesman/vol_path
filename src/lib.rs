@@ -11,6 +11,40 @@ type Point3 = Vec3A;
 type World = Vec<Box<dyn Hittable>>;
 
 
+fn random_vec3_in_range(min: f32, max: f32) -> Vec3A {
+  Vec3A::new(
+    rand::random_range(min..max),
+    rand::random_range(min..max),
+    rand::random_range(min..max),
+  )
+}
+
+
+#[allow(unused)]
+fn random_vec3() -> Vec3A {
+  random_vec3_in_range(0.0, 1.0)
+}
+
+
+fn random_unit_vector() -> Vec3A {
+  let mut p = random_vec3_in_range(-1.0, 1.0);
+  while p.length_squared() > 1.0 || p.length_squared() < 1e-160 {
+    p = random_vec3_in_range(-1.0, 1.0);
+  }
+  p.normalize()
+}
+
+
+fn random_on_hemisphere(normal: Vec3A) -> Vec3A {
+  let on_unit_sphere = random_unit_vector();
+  if Vec3A::dot(on_unit_sphere, normal) > 0.0 {
+    on_unit_sphere
+  } else {
+    -on_unit_sphere
+  }
+}
+
+
 struct Ray {
   origin: Point3,
   direction: Vec3A,
@@ -109,6 +143,7 @@ struct Camera {
   pub aspect_ratio: f32,
   pub image_width: u32,
   pub samples_per_pixel: u32,
+  pub max_depth: u32,
   image_height: u32,
   center: Point3,
   pixel00_loc: Point3,
@@ -118,7 +153,7 @@ struct Camera {
 
 
 impl Camera {
-  fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: u32) -> Self {
+  fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: u32, max_depth: u32) -> Self {
     let image_height = (image_width as f32 / aspect_ratio) as u32;
 
     let center = Point3::new(0.0, 0.0, 0.0);
@@ -141,6 +176,7 @@ impl Camera {
       aspect_ratio,
       image_width,
       samples_per_pixel,
+      max_depth,
       image_height,
       center,
       pixel00_loc,
@@ -150,10 +186,17 @@ impl Camera {
   }
 
 
-  fn ray_color(r: &Ray, world: &World) -> Color {
-    let hit = closest_hit(world, r, &Closed::closed_unchecked(0.0, f32::MAX));
+  fn ray_color(&self, r: &Ray, depth: u32, world: &World) -> Color {
+    if depth == 0 {
+      return Color::new(0.0, 0.0, 0.0);
+    }
+
+    let hit = closest_hit(world, r, &Closed::closed_unchecked(0.001, f32::MAX));
     match hit {
-      HitResult::Hit(data) => 0.5 * (data.normal + 1.0),
+      HitResult::Hit(data) => {
+        let direction = random_on_hemisphere(data.normal);
+        self.ray_color(&Ray::new(data.p, direction), depth - 1, world) * 0.5
+      }
       HitResult::Miss => {
         // Sky
         let unit_direction = r.direction.normalize();
@@ -172,7 +215,7 @@ impl Camera {
         let mut pixel_color = Color::new(0.0, 0.0, 0.0);
         for _ in 0..self.samples_per_pixel {
           let ray = self.get_ray(r, c);
-          pixel_color += Self::ray_color(&ray, world);
+          pixel_color += self.ray_color(&ray, self.max_depth, world);
         }
         pixel_color /= self.samples_per_pixel as f32;
         write_color(&pixel_color, &mut image, r, c);
@@ -232,7 +275,7 @@ pub fn render(out_path: &str) {
     Box::new(Sphere::new(Point3::new(0.0, -100.5, -1.0), 100.0)),
   ];
 
-  let camera = Camera::new(16.0 / 9.0, 400, 8);
+  let camera = Camera::new(16.0 / 9.0, 400, 64, 10);
 
   camera.render(&world, out_path);
 }
