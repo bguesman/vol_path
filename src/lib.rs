@@ -1,4 +1,4 @@
-use glam::Vec3A;
+use glam::{Vec2, Vec3A};
 use image::{Rgb, RgbImage};
 use indicatif::ProgressIterator;
 use intervals::Closed;
@@ -108,6 +108,7 @@ impl Hittable for Sphere {
 struct Camera {
   pub aspect_ratio: f32,
   pub image_width: u32,
+  pub samples_per_pixel: u32,
   image_height: u32,
   center: Point3,
   pixel00_loc: Point3,
@@ -117,7 +118,7 @@ struct Camera {
 
 
 impl Camera {
-  fn new(aspect_ratio: f32, image_width: u32) -> Self {
+  fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: u32) -> Self {
     let image_height = (image_width as f32 / aspect_ratio) as u32;
 
     let center = Point3::new(0.0, 0.0, 0.0);
@@ -139,6 +140,7 @@ impl Camera {
     Camera {
       aspect_ratio,
       image_width,
+      samples_per_pixel,
       image_height,
       center,
       pixel00_loc,
@@ -167,16 +169,27 @@ impl Camera {
 
     for r in (0..image.height()).progress() {
       for c in 0..image.width() {
-        let pixel_center =
-          self.pixel00_loc + (c as f32 * self.pixel_delta_u) + (r as f32 * self.pixel_delta_v);
-        let ray_direction = pixel_center - self.center;
-        let ray = Ray::new(self.center, ray_direction);
-        let color = Self::ray_color(&ray, world);
-        write_color(&color, &mut image, r, c);
+        let mut pixel_color = Color::new(0.0, 0.0, 0.0);
+        for _ in 0..self.samples_per_pixel {
+          let ray = self.get_ray(r, c);
+          pixel_color += Self::ray_color(&ray, world);
+        }
+        pixel_color /= self.samples_per_pixel as f32;
+        write_color(&pixel_color, &mut image, r, c);
       }
     }
 
     image.save(out_path).expect("Failed to save image");
+  }
+
+
+  fn get_ray(&self, r: u32, c: u32) -> Ray {
+    let offset = -0.5 + 0.5 * Vec2::new(rand::random(), rand::random());
+    let pixel_sample = self.pixel00_loc
+      + ((c as f32 + offset.x) * self.pixel_delta_u)
+      + ((r as f32 + offset.y) * self.pixel_delta_v);
+    let ray_direction = pixel_sample - self.center;
+    Ray::new(self.center, ray_direction)
   }
 }
 
@@ -219,7 +232,7 @@ pub fn render(out_path: &str) {
     Box::new(Sphere::new(Point3::new(0.0, -100.5, -1.0), 100.0)),
   ];
 
-  let camera = Camera::new(16.0 / 9.0, 400);
+  let camera = Camera::new(16.0 / 9.0, 400, 8);
 
   camera.render(&world, out_path);
 }
