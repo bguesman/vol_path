@@ -104,6 +104,83 @@ impl Hittable for Sphere {
 }
 
 
+#[allow(unused)]
+struct Camera {
+  pub aspect_ratio: f32,
+  pub image_width: u32,
+  image_height: u32,
+  center: Point3,
+  pixel00_loc: Point3,
+  pixel_delta_u: Vec3A,
+  pixel_delta_v: Vec3A,
+}
+
+
+impl Camera {
+  fn new(aspect_ratio: f32, image_width: u32) -> Self {
+    let image_height = (image_width as f32 / aspect_ratio) as u32;
+
+    let center = Point3::new(0.0, 0.0, 0.0);
+
+    // Viewport dimensions
+    let focal_length = 1.0;
+    let viewport_height = 2.0;
+    let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
+
+    // Pixel mapping
+    let viewport_u = Vec3A::new(viewport_width, 0.0, 0.0);
+    let viewport_v = Vec3A::new(0.0, -viewport_height, 0.0);
+    let pixel_delta_u = viewport_u / image_width as f32;
+    let pixel_delta_v = viewport_v / image_height as f32;
+    let viewport_upper_left =
+      center - Vec3A::new(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
+    let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+    Camera {
+      aspect_ratio,
+      image_width,
+      image_height,
+      center,
+      pixel00_loc,
+      pixel_delta_u,
+      pixel_delta_v,
+    }
+  }
+
+
+  fn ray_color(r: &Ray, world: &World) -> Color {
+    let hit = closest_hit(world, r, &Closed::closed_unchecked(0.0, f32::MAX));
+    match hit {
+      HitResult::Hit(data) => 0.5 * (data.normal + 1.0),
+      HitResult::Miss => {
+        // Sky
+        let unit_direction = r.direction.normalize();
+        let a = 0.5 * (unit_direction.y + 1.0);
+        Color::lerp(Color::new(1.0, 1.0, 1.0), Color::new(0.5, 0.7, 1.0), a)
+      }
+    }
+  }
+
+
+  fn render(&self, world: &World, out_path: &str) {
+    let mut image = RgbImage::new(self.image_width, self.image_height);
+
+    for r in (0..image.height()).progress() {
+      for c in 0..image.width() {
+        let pixel_center =
+          self.pixel00_loc + (c as f32 * self.pixel_delta_u) + (r as f32 * self.pixel_delta_v);
+        let ray_direction = pixel_center - self.center;
+        let ray = Ray::new(self.center, ray_direction);
+        let color = Self::ray_color(&ray, world);
+        write_color(&color, &mut image, r, c);
+      }
+    }
+
+    image.save(out_path).expect("Failed to save image");
+  }
+}
+
+
 fn closest_hit(world: &World, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
   let mut closest_hit = HitResult::Miss;
   let mut closest_t = ray_t.right.0;
@@ -122,20 +199,6 @@ fn closest_hit(world: &World, r: &Ray, ray_t: &Closed<f32>) -> HitResult {
 }
 
 
-fn ray_color(r: &Ray, world: &World) -> Color {
-  let hit = closest_hit(world, r, &Closed::closed_unchecked(0.0, f32::MAX));
-  match hit {
-    HitResult::Hit(data) => 0.5 * (data.normal + 1.0),
-    HitResult::Miss => {
-      // Sky
-      let unit_direction = r.direction.normalize();
-      let a = 0.5 * (unit_direction.y + 1.0);
-      Color::lerp(Color::new(1.0, 1.0, 1.0), Color::new(0.5, 0.7, 1.0), a)
-    }
-  }
-}
-
-
 fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
   let remapped_u8 = color * 255.999;
   image.put_pixel(
@@ -151,45 +214,14 @@ fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
 
 
 pub fn render(out_path: &str) {
-  // Viewport
-  let aspect_ratio = 16.0 / 9.0;
-  let image_width = 400;
-  let image_height = (image_width as f32 / aspect_ratio) as u32;
-
-  // World
   let world: World = vec![
     Box::new(Sphere::new(Point3::new(0.0, 0.0, -1.0), 0.5)),
     Box::new(Sphere::new(Point3::new(0.0, -100.5, -1.0), 100.0)),
   ];
 
-  // Camera
-  let focal_length = 1.0;
-  let camera_center = Point3::new(0.0, 0.0, 0.0);
-  let viewport_height = 2.0;
-  let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
+  let camera = Camera::new(16.0 / 9.0, 400);
 
-  // Calculate viewport bounds
-  let viewport_u = Vec3A::new(viewport_width, 0.0, 0.0);
-  let viewport_v = Vec3A::new(0.0, -viewport_height, 0.0);
-  let pixel_delta_u = viewport_u / image_width as f32;
-  let pixel_delta_v = viewport_v / image_height as f32;
-  let viewport_upper_left =
-    camera_center - Vec3A::new(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
-  let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
-
-  // Render
-  let mut image = RgbImage::new(image_width, image_height);
-  for r in (0..image.height()).progress() {
-    for c in 0..image.width() {
-      let pixel_center = pixel00_loc + (c as f32 * pixel_delta_u) + (r as f32 * pixel_delta_v);
-      let ray_direction = pixel_center - camera_center;
-      let ray = Ray::new(camera_center, ray_direction);
-      let color = ray_color(&ray, &world);
-      write_color(&color, &mut image, r, c);
-    }
-  }
-
-  image.save(out_path).expect("Failed to save image");
+  camera.render(&world, out_path);
 }
 
 
