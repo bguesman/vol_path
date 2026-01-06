@@ -35,6 +35,17 @@ fn random_unit_vector() -> Vec3A {
 }
 
 
+fn random_in_unit_disk() -> Vec3A {
+  let mut p = random_vec3_in_range(-1.0, 1.0);
+  p.z = 0.0;
+  while p.length_squared() >= 1.0 {
+    p = random_vec3_in_range(-1.0, 1.0);
+    p.z = 0.0;
+  }
+  p
+}
+
+
 fn linear_to_gamma(linear_component: f32) -> f32 {
   if linear_component > 0.0 {
     f32::sqrt(linear_component)
@@ -195,7 +206,7 @@ struct MetalMaterial {
 impl Material for MetalMaterial {
   fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
     let reflected = Vec3A::reflect(r.direction, hit.normal);
-    let reflected = (reflected + self.roughness * random_unit_vector()).normalize();
+    let reflected = reflected.normalize() + self.roughness * random_unit_vector();
     let scatter_direction = Ray::new(hit.p, reflected);
     if Vec3A::dot(scatter_direction.direction, hit.normal) > 0.0 {
       Some(ScatterResult {
@@ -260,44 +271,88 @@ struct Camera {
   pub image_width: u32,
   pub samples_per_pixel: u32,
   pub max_depth: u32,
+  pub vfov: f32,
+  pub look_from: Point3,
+  pub look_at: Point3,
+  pub v_up: Vec3A,
+  pub defocus_angle: f32,
+  pub focus_dist: f32,
   image_height: u32,
   center: Point3,
   pixel00_loc: Point3,
   pixel_delta_u: Vec3A,
   pixel_delta_v: Vec3A,
+  // Camera basis vectors
+  u: Vec3A,
+  v: Vec3A,
+  w: Vec3A,
+  defocus_disk_u: Vec3A,
+  defocus_disk_v: Vec3A,
 }
 
 
 impl Camera {
-  fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: u32, max_depth: u32) -> Self {
+  #[allow(clippy::too_many_arguments)]
+  fn new(
+    aspect_ratio: f32,
+    image_width: u32,
+    samples_per_pixel: u32,
+    max_depth: u32,
+    vfov: f32,
+    look_from: Point3,
+    look_at: Point3,
+    v_up: Vec3A,
+    defocus_angle: f32,
+    focus_dist: f32,
+  ) -> Self {
     let image_height = (image_width as f32 / aspect_ratio) as u32;
 
-    let center = Point3::new(0.0, 0.0, 0.0);
+    let center = look_from;
 
     // Viewport dimensions
-    let focal_length = 1.0;
-    let viewport_height = 2.0;
+    let theta = f32::to_radians(vfov);
+    let h = f32::tan(theta / 2.0);
+    let viewport_height = 2.0 * h * focus_dist;
     let viewport_width = viewport_height * (image_width as f32 / image_height as f32);
 
+    // Camera basis frame
+    let w = (look_from - look_at).normalize();
+    let u = v_up.cross(w).normalize();
+    let v = w.cross(u);
+
     // Pixel mapping
-    let viewport_u = Vec3A::new(viewport_width, 0.0, 0.0);
-    let viewport_v = Vec3A::new(0.0, -viewport_height, 0.0);
+    let viewport_u = viewport_width * u;
+    let viewport_v = viewport_height * -v;
     let pixel_delta_u = viewport_u / image_width as f32;
     let pixel_delta_v = viewport_v / image_height as f32;
-    let viewport_upper_left =
-      center - Vec3A::new(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
+    let viewport_upper_left = center - (focus_dist * w) - (viewport_u / 2.0) - (viewport_v / 2.0);
     let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+    let defocus_radius = focus_dist * f32::tan(f32::to_radians(defocus_angle / 2.0));
+    let defocus_disk_u = u * defocus_radius;
+    let defocus_disk_v = v * defocus_radius;
 
     Camera {
       aspect_ratio,
       image_width,
       samples_per_pixel,
       max_depth,
+      vfov,
+      defocus_angle,
+      focus_dist,
+      look_from,
+      look_at,
+      v_up,
       image_height,
       center,
       pixel00_loc,
       pixel_delta_u,
       pixel_delta_v,
+      u,
+      v,
+      w,
+      defocus_disk_u,
+      defocus_disk_v,
     }
   }
 
@@ -353,8 +408,19 @@ impl Camera {
     let pixel_sample = self.pixel00_loc
       + ((c as f32 + offset.x) * self.pixel_delta_u)
       + ((r as f32 + offset.y) * self.pixel_delta_v);
-    let ray_direction = pixel_sample - self.center;
-    Ray::new(self.center, ray_direction)
+    let ray_origin = if self.defocus_angle <= 0.0 {
+      self.center
+    } else {
+      self.defocus_disk_sample()
+    };
+    let ray_direction = pixel_sample - ray_origin;
+    Ray::new(ray_origin, ray_direction)
+  }
+
+
+  fn defocus_disk_sample(&self) -> Point3 {
+    let p = random_in_unit_disk();
+    self.center + (p.x * self.defocus_disk_u) + (p.y * self.defocus_disk_v)
   }
 }
 
@@ -429,7 +495,18 @@ pub fn render(out_path: &str) {
     )),
   ];
 
-  let camera = Camera::new(16.0 / 9.0, 400, 64, 10);
+  let camera = Camera::new(
+    /*aspect_ratio=*/ 16.0 / 9.0,
+    /*image_width=*/ 400,
+    /*samples_per_pixel=*/ 32,
+    /*max_ray_depth=*/ 10,
+    /*v_fov=*/ 20.0,
+    /*look_from=*/ Point3::new(-2.0, 2.0, 1.0),
+    /*look_at=*/ Point3::new(0.0, 0.0, -1.0),
+    /*v_up=*/ Vec3A::new(0.0, 1.0, 0.0),
+    /*defocus_angle=*/ 10.0,
+    /*focus_dist=*/ 3.4,
+  );
 
   camera.render(&world, out_path);
 }
