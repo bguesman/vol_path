@@ -188,17 +188,24 @@ impl Material for LambertianMaterial {
 
 struct MetalMaterial {
   albedo: Color,
+  roughness: f32,
 }
 
 
 impl Material for MetalMaterial {
   fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
     let reflected = Vec3A::reflect(r.direction, hit.normal);
-    Some(ScatterResult {
-      hit,
-      attenuation: self.albedo,
-      scatter_direction: Ray::new(hit.p, reflected),
-    })
+    let reflected = (reflected + self.roughness * random_unit_vector()).normalize();
+    let scatter_direction = Ray::new(hit.p, reflected);
+    if Vec3A::dot(scatter_direction.direction, hit.normal) > 0.0 {
+      Some(ScatterResult {
+        hit,
+        attenuation: self.albedo,
+        scatter_direction,
+      })
+    } else {
+      None
+    }
   }
 }
 
@@ -345,9 +352,11 @@ pub fn render(out_path: &str) {
   };
   let mat_left = MetalMaterial {
     albedo: Color::new(0.8, 0.8, 0.8),
+    roughness: 0.3,
   };
   let mat_right = MetalMaterial {
     albedo: Color::new(0.8, 0.6, 0.2),
+    roughness: 1.0,
   };
 
   let world: World = vec![
@@ -373,7 +382,7 @@ pub fn render(out_path: &str) {
     )),
   ];
 
-  let camera = Camera::new(16.0 / 9.0, 400, 16, 10);
+  let camera = Camera::new(16.0 / 9.0, 400, 64, 10);
 
   camera.render(&world, out_path);
 }
