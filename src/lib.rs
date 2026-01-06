@@ -454,58 +454,81 @@ fn write_color(color: &Color, image: &mut RgbImage, r: u32, c: u32) {
 
 
 pub fn render(out_path: &str) {
-  let mat_ground = LambertianMaterial {
-    albedo: Color::new(0.8, 0.8, 0.0),
-  };
-  let mat_center = LambertianMaterial {
-    albedo: Color::new(0.1, 0.2, 0.5),
-  };
-  let mat_left = DielectricMaterial { ior: 1.5 };
-  let mat_bubble = DielectricMaterial { ior: 1.0 / 1.5 };
-  let mat_right = MetalMaterial {
-    albedo: Color::new(0.8, 0.6, 0.2),
-    roughness: 1.0,
-  };
+  let mut world: World = vec![];
 
-  let world: World = vec![
-    Box::new(Sphere::new(
-      Point3::new(0.0, 0.0, -1.2),
-      0.5,
-      Box::new(mat_center),
-    )),
-    Box::new(Sphere::new(
-      Point3::new(0.0, -100.5, -1.0),
-      100.0,
-      Box::new(mat_ground),
-    )),
-    Box::new(Sphere::new(
-      Point3::new(-1.0, -0.0, -1.0),
-      0.5,
-      Box::new(mat_left),
-    )),
-    Box::new(Sphere::new(
-      Point3::new(-1.0, -0.0, -1.0),
-      0.4,
-      Box::new(mat_bubble),
-    )),
-    Box::new(Sphere::new(
-      Point3::new(1.0, -0.0, -1.0),
-      0.5,
-      Box::new(mat_right),
-    )),
-  ];
+  let mat_ground = LambertianMaterial {
+    albedo: Color::new(0.5, 0.5, 0.5),
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(0.0, -1000.0, 0.0),
+    1000.0,
+    Box::new(mat_ground),
+  )));
+
+  for a in -11..11 {
+    for b in -11..11 {
+      let material_choice: f32 = rand::random();
+      let center: Point3 = Point3::new(
+        a as f32 + 0.9 * rand::random::<f32>(),
+        0.2,
+        b as f32 + 0.9 * rand::random::<f32>(),
+      );
+
+      if (center - Point3::new(4.0, 0.2, 0.0)).length() > 0.9 {
+        let material: Box<dyn Material> = if material_choice < 0.8 {
+          let albedo = random_vec3() * random_vec3();
+          Box::new(LambertianMaterial { albedo })
+        } else if material_choice < 0.95 {
+          let albedo = random_vec3_in_range(0.5, 1.0);
+          let roughness = rand::random_range(0.0..0.5);
+          Box::new(MetalMaterial { albedo, roughness })
+        } else {
+          Box::new(DielectricMaterial { ior: 1.5 })
+        };
+
+        world.push(Box::new(Sphere::new(center, 0.2, material)));
+      }
+    }
+  }
+
+  let mat_1 = DielectricMaterial { ior: 1.5 };
+  world.push(Box::new(Sphere::new(
+    Point3::new(0.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_1),
+  )));
+
+
+  let mat_2 = LambertianMaterial {
+    albedo: Color::new(0.4, 0.2, 0.1),
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(-4.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_2),
+  )));
+
+  let mat_3 = MetalMaterial {
+    albedo: Color::new(0.7, 0.6, 0.5),
+    roughness: 0.0,
+  };
+  world.push(Box::new(Sphere::new(
+    Point3::new(4.0, 1.0, 0.0),
+    1.0,
+    Box::new(mat_3),
+  )));
 
   let camera = Camera::new(
     /*aspect_ratio=*/ 16.0 / 9.0,
     /*image_width=*/ 400,
-    /*samples_per_pixel=*/ 32,
+    /*samples_per_pixel=*/ 100,
     /*max_ray_depth=*/ 10,
     /*v_fov=*/ 20.0,
-    /*look_from=*/ Point3::new(-2.0, 2.0, 1.0),
+    /*look_from=*/ Point3::new(13.0, 2.0, 3.0),
     /*look_at=*/ Point3::new(0.0, 0.0, -1.0),
     /*v_up=*/ Vec3A::new(0.0, 1.0, 0.0),
-    /*defocus_angle=*/ 10.0,
-    /*focus_dist=*/ 3.4,
+    /*defocus_angle=*/ 0.6,
+    /*focus_dist=*/ 10.0,
   );
 
   camera.render(&world, out_path);
