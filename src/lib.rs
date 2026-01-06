@@ -210,6 +210,50 @@ impl Material for MetalMaterial {
 }
 
 
+struct DielectricMaterial {
+  ior: f32,
+}
+
+
+impl DielectricMaterial {
+  fn reflectance(cos_theta: f32, ior: f32) -> f32 {
+    let r0 = (1.0 - ior) / (1.0 + ior);
+    let r0 = r0 * r0;
+    r0 + (1.0 - r0) * f32::powf(1.0 - cos_theta, 5.0)
+  }
+}
+
+
+impl Material for DielectricMaterial {
+  fn scatter<'a>(&self, r: &Ray, hit: &'a Hit<'a>) -> Option<ScatterResult<'a>> {
+    let attenuation = Color::new(1.0, 1.0, 1.0);
+    let ri = if hit.front_face {
+      1.0 / self.ior
+    } else {
+      self.ior
+    };
+
+    let unit_dir = r.direction.normalize();
+    let cos_theta = f32::min(Vec3A::dot(-unit_dir, hit.normal), 1.0);
+    let sin_theta = f32::sqrt(1.0 - cos_theta * cos_theta);
+
+    let cannot_refract = ri * sin_theta > 1.0;
+    let direction =
+      if cannot_refract || DielectricMaterial::reflectance(cos_theta, ri) > rand::random() {
+        unit_dir.reflect(hit.normal)
+      } else {
+        unit_dir.refract(hit.normal, ri)
+      };
+
+    Some(ScatterResult {
+      hit,
+      attenuation,
+      scatter_direction: Ray::new(hit.p, direction),
+    })
+  }
+}
+
+
 #[allow(unused)]
 struct Camera {
   pub aspect_ratio: f32,
@@ -350,10 +394,8 @@ pub fn render(out_path: &str) {
   let mat_center = LambertianMaterial {
     albedo: Color::new(0.1, 0.2, 0.5),
   };
-  let mat_left = MetalMaterial {
-    albedo: Color::new(0.8, 0.8, 0.8),
-    roughness: 0.3,
-  };
+  let mat_left = DielectricMaterial { ior: 1.5 };
+  let mat_bubble = DielectricMaterial { ior: 1.0 / 1.5 };
   let mat_right = MetalMaterial {
     albedo: Color::new(0.8, 0.6, 0.2),
     roughness: 1.0,
@@ -374,6 +416,11 @@ pub fn render(out_path: &str) {
       Point3::new(-1.0, -0.0, -1.0),
       0.5,
       Box::new(mat_left),
+    )),
+    Box::new(Sphere::new(
+      Point3::new(-1.0, -0.0, -1.0),
+      0.4,
+      Box::new(mat_bubble),
     )),
     Box::new(Sphere::new(
       Point3::new(1.0, -0.0, -1.0),
